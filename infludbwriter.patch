@@ -1,0 +1,548 @@
+From ff5c9e09670bf2bf509ce935911e1012dc9288fe Mon Sep 17 00:00:00 2001
+From: Rune Darrud <theflyingcorpse@gmail.com>
+Date: Sat, 23 Jul 2016 14:21:06 +0200
+Subject: [PATCH 1/2] Add InfluxdbWriter
+
+---
+ README.md                                          |  44 ++++++
+ manifests/config.pp                                |   1 +
+ manifests/feature/influxdb.pp                      |  44 ++++++
+ manifests/object/influxdbwriter.pp                 |  81 ++++++++++
+ spec/classes/icinga2_feature_influxdb_spec.rb      |  28 ++++
+ .../defines/icinga2__object/influxdbwriter_spec.rb | 170 +++++++++++++++++++++
+ templates/object/influxdbwriter.conf.erb           |  65 ++++++++
+ 7 files changed, 433 insertions(+)
+ create mode 100644 manifests/feature/influxdb.pp
+ create mode 100644 manifests/object/influxdbwriter.pp
+ create mode 100644 spec/classes/icinga2_feature_influxdb_spec.rb
+ create mode 100644 spec/defines/icinga2__object/influxdbwriter_spec.rb
+ create mode 100644 templates/object/influxdbwriter.conf.erb
+
+diff --git a/README.md b/README.md
+index f36c1ae..694a19b 100644
+--- a/README.md
++++ b/README.md
+@@ -470,6 +470,7 @@ Object types:
+ * [icinga2::object::notificationcommand](#icinga2objectnotificationcommand)
+ * [icinga2::object::perfdatawriter](#icinga2objectperfdatawriter)
+ * [icinga2::object::opentsdbwriter](#icinga2objectopentsdbwriter)
++* [icinga2::object::influxdbwriter](#icinga2objectinfluxdbwriter)
+ * [icinga2::object::scheduleddowntime](#icinga2objectscheduleddowntime)
+ * [icinga2::object::service](#icinga2objectservice)
+ * [icinga2::object::servicegroup](#icinga2objectservicegroup)
+@@ -1000,6 +1001,49 @@ icinga2::object::opentsdbwriter { 'opentsdb_server':
+   port       => 4242,
+ }
+ ````
++####[`icinga2::object::influxdbwriter`](id:object_influxdbwriter)
++
++This defined type created **InfluxdbWriter** objects
++
++Example usage:
++````
++icinga2::object::influxdbwriter {'influxdb':
++  target_dir => '/etc/icinga2/features-enabled',
++  file_name  => 'influxdb.conf',
++  host       => '127.0.0.1',
++  port       => 8086,
++  database   => 'icinga',
++}
++````
++
++Advanced example:
++````
++$host_template = "{
++  measurement = \"\$host.check_command\$\"
++   tags = {
++   host = \"\$host.name\$\"
++ }
++}"
++$service_template = "{
++  measurement = \"\$service.check_command\$\"
++  tags = {
++    host = \"\$host.name\$\"
++    service = \"\$service.name\$\"
++  }
++}"
++
++icinga2::object::influxdbwriter {'influxdb':
++  host                   => 'localhost',
++  port                   => 8086,
++  database               => 'icinga',
++  enable_send_thresholds => true,
++  enable_send_metadata   => true,
++  flush_threshold        => 100,
++  flush_interval         => 5,
++  host_template          => $host_template,
++  service_template       => $service_template,
++}
++````
+ 
+ ####[`icinga2::object::perfdatawriter`](id:object_perfdatawriter)
+ 
+diff --git a/manifests/config.pp b/manifests/config.pp
+index cf40a32..69d0e7b 100644
+--- a/manifests/config.pp
++++ b/manifests/config.pp
+@@ -68,6 +68,7 @@
+       '/etc/icinga2/objects/dependencies',
+       '/etc/icinga2/objects/perfdatawriters',
+       '/etc/icinga2/objects/graphitewriters',
++      '/etc/icinga2/objects/influxdbwriters',
+       '/etc/icinga2/objects/idomysqlconnections',
+       '/etc/icinga2/objects/idopgsqlconnections',
+       '/etc/icinga2/objects/livestatuslisteners',
+diff --git a/manifests/feature/influxdb.pp b/manifests/feature/influxdb.pp
+new file mode 100644
+index 0000000..7f4f15b
+--- /dev/null
++++ b/manifests/feature/influxdb.pp
+@@ -0,0 +1,44 @@
++# == Class: icinga2::feature::influxdb
++#
++# Manage and enable influxdb of Icinga2
++#
++class icinga2::feature::influxdb (
++  $host                   = '127.0.0.1',
++  $port                   = 8086,
++  $database               = 'icinga2',
++  $username               = undef,
++  $password               = undef,
++  $ssl_enable             = undef,
++  $ssl_ca_cert            = undef,
++  $ssl_cert               = undef,
++  $ssl_key                = undef,
++  $host_template          = undef,
++  $service_template       = undef,
++  $enable_send_thresholds = undef,
++  $enable_send_metadata   = undef,
++  $flush_interval         = '10',
++  $flush_threshold        = '1024',
++) {
++  ::icinga2::object::influxdbwriter { 'influxdb':
++    host                   => $host,
++    port                   => $port,
++    database               => $database,
++    username               => $username,
++    password               => $password,
++    ssl_enable             => $ssl_enable,
++    ssl_ca_cert            => $ssl_ca_cert,
++    ssl_cert               => $ssl_cert,
++    ssl_key                => $ssl_key,
++    host_template          => $host_template,
++    service_template       => $service_template,
++    enable_send_thresholds => $enable_send_thresholds,
++    enable_send_metadata   => $enable_send_metadata,
++    flush_interval         => $flush_interval,
++    flush_threshold        => $flush_threshold,
++    target_dir             => '/etc/icinga2/features-available',
++  }
++
++  ::icinga2::feature { 'influxdb':
++    manage_file => false,
++  }
++}
+diff --git a/manifests/object/influxdbwriter.pp b/manifests/object/influxdbwriter.pp
+new file mode 100644
+index 0000000..4eaf18b
+--- /dev/null
++++ b/manifests/object/influxdbwriter.pp
+@@ -0,0 +1,81 @@
++# == Defined type: icinga2::object::influxdbwriter
++#
++#  This is a defined type for Icinga 2 InfluxdbWriter objects.
++# See the following Icinga 2 doc page for more info:
++# http://docs.icinga.org/icinga2/latest/doc/module/icinga2/chapter/object-types#objecttype-influxdbwriter
++#
++# === Parameters
++#
++# See the inline comments.
++#
++
++define icinga2::object::influxdbwriter (
++  $host                   = '127.0.0.1',
++  $port                   = 8086,
++  $database               = 'icinga2',
++  $username               = undef,
++  $password               = undef,
++  $ssl_enable             = undef,
++  $ssl_ca_cert            = undef,
++  $ssl_cert               = undef,
++  $ssl_key                = undef,
++  $host_template          = undef,
++  $service_template       = undef,
++  $enable_send_thresholds = undef,
++  $enable_send_metadata   = undef,
++  $flush_interval         = 10,
++  $flush_threshold        = 1024,
++  $target_dir             = '/etc/icinga2/objects/influxdbwriters',
++  $file_name              = "${name}.conf",
++) {
++  # Do some validation
++  validate_string($host)
++  validate_string($database)
++  validate_integer($port)
++  validate_integer($flush_interval)
++  validate_integer($flush_threshold)
++
++  if $username != undef {
++    validate_string($username)
++  }
++
++  if $password != undef {
++    validate_string($password)
++  }
++
++  if $ssl_enable != undef {
++    validate_bool($ssl_enable)
++  }
++
++  if $ssl_ca_cert != undef {
++    validate_string($ssl_ca_cert)
++  }
++
++  if $ssl_cert != undef {
++    validate_string($ssl_cert)
++  }
++
++  if $ssl_key != undef {
++    validate_string($ssl_key)
++  }
++
++  if $enable_send_thresholds != undef {
++    validate_bool($enable_send_thresholds)
++  }
++
++  if $enable_send_metadata != undef {
++    validate_bool($enable_send_metadata)
++  }
++
++  file { "${target_dir}/${file_name}":
++    ensure  => file,
++    owner   => $::icinga2::config_owner,
++    group   => $::icinga2::config_group,
++    mode    => $::icinga2::config_mode,
++    content => template('icinga2/object/influxdbwriter.conf.erb'),
++  }
++
++  if $::icinga2::manage_service {
++    File["${target_dir}/${file_name}"] ~> Class['::icinga2::service']
++  }
++}
+diff --git a/spec/classes/icinga2_feature_influxdb_spec.rb b/spec/classes/icinga2_feature_influxdb_spec.rb
+new file mode 100644
+index 0000000..2bf796a
+--- /dev/null
++++ b/spec/classes/icinga2_feature_influxdb_spec.rb
+@@ -0,0 +1,28 @@
++require 'spec_helper'
++require 'variants'
++
++describe 'icinga2::feature::influxdb' do
++
++  default = 'Debian wheezy'
++
++  let :facts do
++    IcingaPuppet.variants[default]
++  end
++
++  context "on #{default} with default parameters" do
++   let :pre_condition do
++      "include '::icinga2'"
++    end
++
++    it { should contain_class('icinga2::feature::influxdb') }
++    it { should contain_icinga2__object__influxdbwriter('influxdb') }
++    it { should contain_icinga2__feature('influxdb').with({
++            :manage_file => false,
++       }) }
++    it { should contain_file('/etc/icinga2/features-available/influxdb.conf').with({
++            :ensure => 'file',
++            :path => '/etc/icinga2/features-available/influxdb.conf',
++            :content => /object InfluxdbWriter "influxdb"/,
++       }) }
++  end
++end
+diff --git a/spec/defines/icinga2__object/influxdbwriter_spec.rb b/spec/defines/icinga2__object/influxdbwriter_spec.rb
+new file mode 100644
+index 0000000..5754f65
+--- /dev/null
++++ b/spec/defines/icinga2__object/influxdbwriter_spec.rb
+@@ -0,0 +1,170 @@
++require 'spec_helper'
++require 'variants'
++
++describe 'icinga2::object::influxdbwriter', :type => :define do
++  IcingaPuppet.variants.each do |name, facts|
++    context "on #{name} with basic parameters" do
++      let :facts do
++        facts
++      end
++      let :pre_condition do
++        " include 'icinga2'"
++      end
++
++      let(:title) { 'influxdbtestserver' }
++
++      object_file = '/etc/icinga2/objects/influxdbwriters/influxdbtestserver.conf'
++      it { should contain_icinga2__object__influxdbwriter('influxdbtestserver') }
++      it { should contain_file(object_file).with({
++            :ensure => 'file',
++            :path => '/etc/icinga2/objects/influxdbwriters/influxdbtestserver.conf',
++            :content => /object InfluxdbWriter "influxdbtestserver"/,
++          }) }
++      it { should contain_file(object_file).with_content(/^\s*host = "127.0.0.1"$/) }
++      it { should contain_file(object_file).with_content(/^\s*port = 8086$/) }
++
++    end
++    context "on #{name} with non basic parameters" do
++      let :facts do
++        facts
++      end
++      let :params do
++      {
++        :host => 'www.icinga.org',
++        :database => 'icingasuperDB',
++        :port => '1234',
++      }
++      end
++      let :pre_condition do
++        "include 'icinga2'"
++      end
++
++      let(:title) { 'influxdb2testserver' }
++
++      object_file = '/etc/icinga2/objects/influxdbwriters/influxdb2testserver.conf'
++      it { should contain_icinga2__object__influxdbwriter('influxdb2testserver') }
++      it { should contain_file(object_file).with({
++            :ensure => 'file',
++            :path => '/etc/icinga2/objects/influxdbwriters/influxdb2testserver.conf',
++            :content => /object InfluxdbWriter "influxdb2testserver"/,
++          }) }
++      it { should contain_file(object_file).with_content(/^\s*host = "www.icinga.org"$/) }
++      it { should contain_file(object_file).with_content(/^\s*port = 1234$/) }
++      it { should contain_file(object_file).with_content(/^\s*database = "icingasuperDB"$/) }
++      it { should contain_file(object_file).with_content(/^\s*host_template = {/) }
++      it { should contain_file(object_file).with_content(/^\s*service_template = {/) }
++      it { should_not contain_file(object_file).with_content(/^\s*enable_send_thresholds/) }
++      it { should_not contain_file(object_file).with_content(/^\s*enable_send_metadata/) }
++      it { should_not contain_file(object_file).with_content(/^\s*ssl_enable = true/) }
++      it { should_not contain_file(object_file).with_content(/^\s*ssl_enable = false/) }
++
++    end
++    context "on #{name} with more non basic parameters" do
++      let :facts do
++        facts
++      end
++      let :params do
++      {
++        :host => 'www.icinga.org',
++        :port => '1234',
++        :database => 'icingaTESTdb',
++        :ssl_enable => false,
++        :enable_send_thresholds => true,
++        :enable_send_metadata => false,
++      }
++      end
++      let :pre_condition do
++        "include 'icinga2'"
++      end
++
++      let(:title) { 'influxdb2testserver' }
++
++      object_file = '/etc/icinga2/objects/influxdbwriters/influxdb2testserver.conf'
++      it { should contain_icinga2__object__influxdbwriter('influxdb2testserver') }
++      it { should contain_file(object_file).with({
++            :ensure => 'file',
++            :path => '/etc/icinga2/objects/influxdbwriters/influxdb2testserver.conf',
++            :content => /object InfluxdbWriter "influxdb2testserver"/,
++          }) }
++      it { should contain_file(object_file).with_content(/^\s*host = "www.icinga.org"$/) }
++      it { should contain_file(object_file).with_content(/^\s*port = 1234$/) }
++      it { should contain_file(object_file).with_content(/^\s*database = "icingaTESTdb"$/) }
++      it { should_not contain_file(object_file).with_content(/^\s*ssl_enable = true$/) }
++      it { should_not contain_file(object_file).with_content(/^\s*ssl_ca_cert$/) }
++      it { should_not contain_file(object_file).with_content(/^\s*ssl_cert$/) }
++      it { should_not contain_file(object_file).with_content(/^\s*ssl_key$/) }
++      it { should_not contain_file(object_file).with_content(/^\s*ssl_enable = false$/) }
++      it { should contain_file(object_file).with_content(/^\s*enable_send_thresholds = true$/) }
++      it { should contain_file(object_file).with_content(/^\s*enable_send_metadata = false$/) }
++    end
++    context "on #{name} with influxdb ssl_enable == true parameters" do
++      let :facts do
++        facts
++      end
++      let :params do
++      {
++        :ssl_enable => true,
++        :ssl_ca_cert => '/etc/sslca.crt',
++        :ssl_cert => '/etc/sslcert.crt',
++        :ssl_key  => '/etc/sslkey.key',
++      }
++      end
++      let :pre_condition do
++        "include 'icinga2'"
++      end
++
++      let(:title) { 'influxdb3testserver' }
++
++      object_file = '/etc/icinga2/objects/influxdbwriters/influxdb3testserver.conf'
++      it { should contain_icinga2__object__influxdbwriter('influxdb3testserver') }
++      it { should contain_file(object_file).with({
++            :ensure => 'file',
++            :path => '/etc/icinga2/objects/influxdbwriters/influxdb3testserver.conf',
++            :content => /object InfluxdbWriter "influxdb3testserver"/,
++          }) }
++      it { should contain_file(object_file).with_content(/^\s*ssl_enable = true$/) }
++      it { should contain_file(object_file).with_content(/^\s*ssl_ca_cert = "\/etc\/sslca.crt"$/) }
++      it { should contain_file(object_file).with_content(/^\s*ssl_cert = "\/etc\/sslcert.crt"$/) }
++      it { should contain_file(object_file).with_content(/^\s*ssl_key = "\/etc\/sslkey.key"$/) }
++    end
++    context "on #{name} with custom template parameters" do
++      let :facts do
++        facts
++      end
++      let :params do
++      {
++        :host_template => '{
++    measurement = "$host.vars.measurement$"
++    tags = {
++      host = "$host.display_name$"
++      system = "$host.vars.system$"
++    }
++}',
++        :service_template => '{
++    measurement = "$service.vars.measurement$"
++    tags = {
++      host = "$host.display_name$"
++      service = "$service.display_name$"
++      type = "$service.vars.type$"
++    }
++}',
++      }
++      end
++      let :pre_condition do
++        "include 'icinga2'"
++      end
++
++      let(:title) { 'influxdb4testserver' }
++
++      object_file = '/etc/icinga2/objects/influxdbwriters/influxdb4testserver.conf'
++      it { should contain_icinga2__object__influxdbwriter('influxdb4testserver') }
++      it { should contain_file(object_file).with({
++            :ensure => 'file',
++            :path => '/etc/icinga2/objects/influxdbwriters/influxdb4testserver.conf',
++            :content => /object InfluxdbWriter "influxdb4testserver"/,
++          }) }
++      it { should contain_file(object_file).with_content(/^\s*host_template = {\n\s*measurement = "\$host.vars.measurement\$"\n\s*tags = {\n\s*host = "\$host.display_name\$"\n\s*system = "\$host.vars.system\$"\n\s*}\n\s*}$/) }
++      it { should contain_file(object_file).with_content(/^\s*service_template = {\n\s*measurement = "\$service.vars.measurement\$"\n\s*tags = {\n\s*host = "\$host.display_name\$"\n\s*service = "\$service.display_name\$"\n\s*type = "\$service.vars.type\$"\n\s*}\n\s*}$/) }
++    end
++  end
++end
+diff --git a/templates/object/influxdbwriter.conf.erb b/templates/object/influxdbwriter.conf.erb
+new file mode 100644
+index 0000000..dfa13c0
+--- /dev/null
++++ b/templates/object/influxdbwriter.conf.erb
+@@ -0,0 +1,65 @@
++<%= scope.function_template(['icinga2/_header.erb']) -%>
++
++library "perfdata"
++
++object InfluxdbWriter "<%= @name -%>" {
++  <%-#- If any of the @ parameters are undefined, don't print anything for them: -%>
++  <%- if @host -%>
++  <%-# Otherwise, include the parameter: -%>
++  host = "<%= @host %>"
++  <%- end -%>
++  <%- if @port -%>
++  port = <%= @port %>
++  <%- end -%>
++  <%- if @database -%>
++  database = "<%= @database %>"
++  <%- end -%>
++  <%- if @username -%>
++  username = "<%= @username %>"
++  <%- end -%>
++  <%- if @password -%>
++  password = "<%= @password %>"
++  <%- end -%>
++  <%- if @ssl_enable -%>
++  ssl_enable = <%= @ssl_enable %>
++  <%- if @ssl_enable == true -%>
++  ssl_ca_cert = "<%= @ssl_ca_cert %>"
++  ssl_cert = "<%= @ssl_cert %>"
++  ssl_key = "<%= @ssl_key %>"
++  <%- end -%>
++  <%- end -%>
++  <%- if @host_template -%>
++  host_template = <%= @host_template %>
++  <%- else -%>
++  host_template = {
++    measurement = "$host.check_command$"
++    tags = {
++      hostname = "$host.name$"
++    }
++  }
++  <%- end -%>
++  <%- if @service_template -%>
++  service_template = <%= @service_template %>
++  <%- else -%>
++  service_template = {
++    measurement = "$service.check_command$"
++    tags = {
++      hostname = "$host.name$"
++      service = "$service.name$"
++    }
++  }
++  <%- end -%>
++  <%- if @enable_send_thresholds.is_a? TrueClass or @enable_send_thresholds.is_a? FalseClass -%>
++  enable_send_thresholds = <%= @enable_send_thresholds %>
++  <%- end -%>
++  <%- if @enable_send_metadata.is_a? TrueClass or @enable_send_metadata.is_a? FalseClass -%>
++  enable_send_metadata = <%= @enable_send_metadata %>
++  <%- end -%>
++  <%- if @flush_interval -%>
++  flush_interval = <%= @flush_interval %>
++  <%- end -%>
++  <%- if @flush_threshold -%>
++  flush_threshold = <%= @flush_threshold %>
++  <%- end -%>
++
++}
+
+From a95ed0454fe8475c737e2bf1426fac47665ab518 Mon Sep 17 00:00:00 2001
+From: Rune Darrud <theflyingcorpse@gmail.com>
+Date: Sat, 23 Jul 2016 19:02:34 +0200
+Subject: [PATCH 2/2] Update READMe to reflect the default parameters.
+
+---
+ README.md | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/README.md b/README.md
+index 694a19b..bb14a10 100644
+--- a/README.md
++++ b/README.md
+@@ -1016,18 +1016,18 @@ icinga2::object::influxdbwriter {'influxdb':
+ }
+ ````
+ 
+-Advanced example:
++Advanced example, using the default host and service template:
+ ````
+ $host_template = "{
+   measurement = \"\$host.check_command\$\"
+    tags = {
+-   host = \"\$host.name\$\"
++   hostname = \"\$host.name\$\"
+  }
+ }"
+ $service_template = "{
+   measurement = \"\$service.check_command\$\"
+   tags = {
+-    host = \"\$host.name\$\"
++    hostmae = \"\$host.name\$\"
+     service = \"\$service.name\$\"
+   }
+ }"
