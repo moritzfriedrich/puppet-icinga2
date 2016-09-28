@@ -101,4 +101,131 @@ describe 'icinga2::object::host' do
     pending
   end
 
+  context "on default #{default} with parameter is_template=true" do
+    let :facts do
+      IcingaPuppet.variants[default]
+    end
+    let :pre_condition do
+      "class { 'icinga2':
+      }"
+    end
+
+    let(:title) { 'testhost' }
+
+    let(:params) do
+      {
+        :object_hostname => 'testhost',
+        :display_name => 'testhost',
+        :target_file_name => 'testhost.conf',
+        :is_template => true,
+      }
+    end
+
+    object_file = '/etc/icinga2/objects/hosts/testhost.conf'
+    it { should contain_icinga2__object__host('testhost') }
+    it { should contain_file(object_file).with({
+          :ensure => 'file',
+          :path => '/etc/icinga2/objects/hosts/testhost.conf',
+          :content => /template Host "testhost"/,
+        }) }
+    it { should_not contain_file(object_file).with_content(/^\s*import "testhost"$/) }
+
+  end
+
+  context "on default #{default} with parameter is_template=true and import templates" do
+    let :facts do
+      IcingaPuppet.variants[default]
+    end
+    let :pre_condition do
+      "class { 'icinga2':
+      }"
+    end
+
+    let(:title) { 'testhost' }
+
+    let(:params) do
+      {
+        :object_hostname => 'testhost',
+        :display_name => 'testhost',
+        :target_file_name => 'testhost.conf',
+        :is_template => true,
+        :templates => [ 'testhost' , 'generic-host']
+      }
+    end
+
+    object_file = '/etc/icinga2/objects/hosts/testhost.conf'
+    it { should contain_icinga2__object__host('testhost') }
+    it { should contain_file(object_file).with({
+          :ensure => 'file',
+          :path => '/etc/icinga2/objects/hosts/testhost.conf',
+          :content => /template Host "testhost"/,
+        }) }
+    it { should_not contain_file(object_file).with_content(/^\s*import "testhost"$/) }
+    it { should contain_file(object_file).with_content(/^\s*import "generic-host"$/) }
+
+  end
+
+    context "on #{default} with custom_prepend parameter" do
+      let :facts do
+        IcingaPuppet.variants[default]
+      end
+      let :params do
+        {
+            :display_name => 'testhost',
+            :custom_prepend => [
+                'vars += { disks["disk"] = {} }',
+                '# this is just a comment',
+              ]
+        }
+      end
+      let :pre_condition do
+        "include 'icinga2'"
+      end
+
+      let(:title) { 'testhost' }
+
+      object_file = '/etc/icinga2/objects/hosts/testhost.conf'
+      it { should contain_icinga2__object__host('testhost') }
+      it { should contain_file(object_file).with({
+            :ensure => 'file',
+            :path => '/etc/icinga2/objects/hosts/testhost.conf',
+            :content => /object Host "testhost"/,
+          }) }
+      it { should contain_file(object_file).with_content(/^\s*import "generic-host"$/) }
+      it { should contain_file(object_file).with_content(/^\s*display_name = "testhost"$/) }
+      it { should contain_file(object_file).with_content(/^\s*vars \+= { disks\["disk"\] = {} }/) }
+      it { should contain_file(object_file).with_content(/^\s*# this is just a comment/) }
+    end
+    context "on #{default} with custom_append parameter" do
+      let :facts do
+        IcingaPuppet.variants[default]
+      end
+      let :params do
+        {
+            :display_name => 'testhost',
+            :custom_append => [
+                'vars += { disks["disk"] = {} }',
+                '# this is just a comment',
+              ]
+        }
+      end
+      let :pre_condition do
+        "include 'icinga2'"
+      end
+
+      let(:title) { 'testhost' }
+
+      object_file = '/etc/icinga2/objects/hosts/testhost.conf'
+      it { should contain_icinga2__object__host('testhost') }
+      it { should contain_file(object_file).with({
+            :ensure => 'file',
+            :path => '/etc/icinga2/objects/hosts/testhost.conf',
+            :content => /object Host "testhost"/,
+          }) }
+      it { should contain_file(object_file).with_content(/^\s*import "generic-host"$/) }
+      it { should contain_file(object_file).with_content(/^\s*display_name = "testhost"$/) }
+      it { should contain_file(object_file).with_content(/^\s*vars \+= { disks\["disk"\] = {} }/) }
+      it { should contain_file(object_file).with_content(/^\s*# this is just a comment/) }
+    end
+
 end
