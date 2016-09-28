@@ -15,7 +15,8 @@ object CheckCommand "<%= @object_checkcommandname %>" {
   import "<%= t -%>"
   <%- end -%>
   <%- if @command -%>
-  command = [ <% if @cmd_path -%><%= @cmd_path -%> + <% end -%><% @command.each_with_index do |cmd, i| %>"<%= cmd -%>"<%= ', ' if i < (@command.size - 1) %><% end %> ]
+  <%- a_command = [@command].flatten.compact -%>
+  command = [ <% if @sudo %>"<%= @sudo_cmd %>", <% end %><% a_command.each_with_index do |cmd, i| %><% if @cmd_path and i == 0 -%><%= @cmd_path -%> + <% end -%>"<%= cmd -%>"<%= ', ' if i < (a_command.size - 1) %><% end %> ]
   <%- end -%>
   <%- if @arguments.any? -%>
 
@@ -23,7 +24,9 @@ object CheckCommand "<%= @object_checkcommandname %>" {
   <%- end -%>
   <%- if @vars.any? -%>
 
-  vars += <%= scope.function_icinga2_config_value([@vars]) %>
+  <%- @vars.each do |key, val| -%>
+  vars.<%= key -%> = <%= val %>
+  <%- end -%>
   <%- end -%>
   <%- if @timeout -%>
 
